@@ -17,6 +17,13 @@ jobs:
         config:
           - name: Windows
             os: windows-latest
+            target: Win64
+          - name: Android32
+            os: ubuntu-latest
+            target: Android32
+          - name: Android64
+            os: ubuntu-latest
+            target: Android64
 
     name: Build ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
@@ -54,7 +61,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          files: ${{ steps.build.outputs.build-output }}
+          files: ${{ steps.build.outputs.build-output }}/*.geode
           generate_release_notes: true
           draft: false
           prerelease: false
