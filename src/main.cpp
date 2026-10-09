@@ -106,18 +106,21 @@ void traverse_gameobject(CCNode* node, const CCSize& parent_content_size, json& 
     }
 }
 
-void traverse(CCNode* node, json& json_object, std::unordered_set<int> visited) {
-    const auto children_count = node->getChildrenCount();
-    if (auto gob = dynamic_cast<GameObject *>(node); gob
-            && !visited.contains(gob->m_objectID)
-            && !(gob->m_objectID == 8 && gob->getPositionX() == 0 && gob->getPositionY() == 105) // avoid anticheat spike
-        ) {
+void dump_gameobject(GameObject* gob, json& json_object, std::unordered_set<int>& visited) {
+    if (!gob
+            || visited.contains(gob->m_objectID)
+            || (gob->m_objectID == 8 && gob->getPositionX() == 0 && gob->getPositionY() == 105) // avoid anticheat spike
+        ) return;
+    {
+        auto* node = static_cast<CCNode*>(gob);
+        const auto children_count = node->getChildrenCount();
         visited.insert(gob->m_objectID);
         auto id_key = std::to_string(gob->m_objectID);
         auto hitbox = gob->getObjectRect();
         auto hitboxjson = json::object();
-        hitboxjson["x"] = hitbox.origin.x;
-        hitboxjson["y"] = hitbox.origin.y;
+        // relative to the object's centre (the old dump wrote absolute level coordinates)
+        hitboxjson["x"] = hitbox.origin.x - gob->getPositionX();
+        hitboxjson["y"] = hitbox.origin.y - gob->getPositionY();
         hitboxjson["width"] = hitbox.size.width;
         hitboxjson["height"] = hitbox.size.height;
         hitboxjson["radius"] = gob->getObjectRadius();
@@ -125,6 +128,14 @@ void traverse(CCNode* node, json& json_object, std::unordered_set<int> visited) 
         json_object[id_key]["frame"] = sanitize_utf8(get_frame_name(gob));
         json_object[id_key]["type"] = gob->getType();
         json_object[id_key]["hitbox"].push_back(hitboxjson);
+        // transform of the instance the hitbox was measured on (prefer rot 0 / scale 1, see onButton)
+        json_object[id_key]["instance"] = {
+            {"rot", gob->getRotation()},
+            {"scale_x", gob->getScaleX()},
+            {"scale_y", gob->getScaleY()},
+            {"flip_x", gob->isFlipX()},
+            {"flip_y", gob->isFlipY()}
+        };
 
         json_object[id_key]["default_z_layer"] = gob->m_defaultZLayer;
         json_object[id_key]["default_z_order"] = gob->m_defaultZOrder;
@@ -153,22 +164,27 @@ void traverse(CCNode* node, json& json_object, std::unordered_set<int> visited) 
             auto child = children->objectAtIndex(i);
             traverse_gameobject(dynamic_cast<CCNode*>(child), gob->getContentSize(), json_object[id_key]["children"]);
         }
-    } else {
-        auto children = node->getChildren();
-        for (unsigned int i = 0; i < children_count; ++i) {
-            auto child = children->objectAtIndex(i);
-            traverse(dynamic_cast<CCNode*>(child), json_object, visited);
-        }
     }
 }
 
 class $modify(EUIHook, EditorUI) {
     void onButton(CCObject* sender) {
-        geode::createQuickPopup("object.json", "For this to work correctly you need to have every single object visible on screen!", "Back", "Run", [](FLAlertLayer*, bool yes) {
+        geode::createQuickPopup("object.json", "This will dump every object in the current level.", "Back", "Run", [](FLAlertLayer*, bool yes) {
             if (!yes) return;
             json json;
             std::unordered_set<int> visited = {914};
-            traverse(CCScene::get()->getChildByIDRecursive("batch-layer"), json, visited);
+            auto* editorLayer = LevelEditorLayer::get();
+            if (!editorLayer || !editorLayer->m_objects) return;
+            // pass 0: only untransformed instances, so hitbox width/height are the object's own;
+            // pass 1: anything left (ids that only appear rotated / scaled)
+            for (int pass = 0; pass < 2; ++pass) {
+                for (unsigned int i = 0; i < editorLayer->m_objects->count(); ++i) {
+                    auto* gob = static_cast<GameObject*>(editorLayer->m_objects->objectAtIndex(i));
+                    if (!gob) continue;
+                    if (pass == 0 && (gob->getRotation() != 0.f || gob->getScaleX() != 1.f || gob->getScaleY() != 1.f)) continue;
+                    dump_gameobject(gob, json, visited);
+                }
+            }
             std::ofstream o(geode::Mod::get()->getSaveDir() / "object.json");
             o << json.dump(4);
             o.close();
